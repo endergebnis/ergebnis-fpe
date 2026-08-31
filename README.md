@@ -63,7 +63,7 @@ Measured locally with `cargo build --release`, `/usr/bin/time -v` (CLI) and
 
 | Operation | ns/op | ops/s |
 |-----------|-------|-------|
-| `make_fingerprint` (encrypt) | ~832  | ~1.20 M |
+| `make_fingerprint` (encrypt) | ~818  | ~1.22 M |
 | `recover_values` (decrypt)   | ~1060 | ~0.94 M |
 
 Built with `-C target-cpu=native` and `lto = "fat"` (see `.cargo/config.toml`).
@@ -123,19 +123,22 @@ so it disappears next to network I/O and TLS:
 | 1,000,000 | ~100% (full core) |
 
 Because validation is stateless, it also scales with worker threads. Measured
-on this box (8 physical cores / 16 threads, Xeon E5-2667 v3):
+on this box (8 physical cores / 16 threads, Xeon E5-2667 v3), pinned to
+physical cores with `taskset -c 0-7` to avoid hyperthread noise:
 
-| Threads | Throughput | Speedup |
-|---------|------------|---------|
-| 1 | ~0.86 M req/s | 1× |
-| 8 | ~5.6 M req/s | 6.5× |
-| 16 | ~7.6 M req/s | 8.7× |
+| Cores (physical) | Throughput | Speedup | Efficiency |
+|-------------------|------------|---------|------------|
+| 1 | ~0.87 M req/s | 1× | 100% |
+| 8 | ~6.31 M req/s | 7.26× | ~91% |
 
-Scaling is sub-linear: ~6.5× at 8 threads and only ~8.7× at 16, because the
-16 logical CPUs are 8 physical cores + hyperthreads (SMT adds little for this
-integer-bound workload) and memory bandwidth becomes the limiter. Plan on
-~0.85 M req/s per *physical* core, not per thread. The token layer is never
-the bottleneck at realistic traffic — the network stack is.
+Near-linear, not exactly linear: the ~9% gap from ideal 8× is consistent with
+shared L3 cache traffic and per-core turbo headroom shrinking as more cores
+go active — normal for a CPU-bound workload, not a sign of contention in the
+token logic itself (it's lock-free and stateless by construction). Plan on
+~0.85 M req/s per physical core; SMT (hyperthreads) adds little for this
+integer-bound workload, so size capacity by physical cores, not logical CPUs.
+The token layer is never the bottleneck at realistic traffic — the network
+stack is.
 
 Add the crate as a dependency and call the same primitives the CLI uses:
 
