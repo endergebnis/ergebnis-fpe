@@ -63,8 +63,13 @@ Measured locally with `cargo build --release`, `/usr/bin/time -v` (CLI) and
 
 | Operation | ns/op | ops/s |
 |-----------|-------|-------|
-| `make_fingerprint` (encrypt) | ~950  | ~1.05 M |
-| `recover_values` (decrypt)   | ~1065 | ~0.94 M |
+| `make_fingerprint` (encrypt) | ~832  | ~1.20 M |
+| `recover_values` (decrypt)   | ~1060 | ~0.94 M |
+
+Built with `-C target-cpu=native` and `lto = "fat"` (see `.cargo/config.toml`).
+Decrypt is slower because it ends in `decode`/`from_base62` with 128-bit
+arithmetic (base-24 value > 2^64); AVX2 helps the encrypt side, not the u128
+division on the decrypt side.
 
 ### Full CLI call (one process per token)
 

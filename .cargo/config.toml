@@ -1,0 +1,4 @@
+# Haswell-Xeon (AVX2/BMI2/FMA). `native` bindet ans Build-System;
+# fuer portable Binaries stattdessen `target-cpu=haswell`.
+[build]
+rustflags = ["-C", "target-cpu=native"]

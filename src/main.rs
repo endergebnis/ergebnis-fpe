@@ -74,8 +74,11 @@ fn cmd_init(force: bool) {
         exit(1);
     }
     let secret = generate_secret();
-    std::fs::write(path, format!("SERVER_SECRET={secret}\nWINDOW_MINUTES={DEFAULT_WINDOW_MINUTES}\n"))
-        .expect(".env schreiben");
+    std::fs::write(
+        path,
+        format!("SERVER_SECRET={secret}\nWINDOW_MINUTES={DEFAULT_WINDOW_MINUTES}\nTHREADS=8\n"),
+    )
+    .expect(".env schreiben");
     println!("SERVER_SECRET={secret} -> {path} geschrieben (geheim halten!)");
 }
 
@@ -174,10 +177,13 @@ fn cmd_benchreq(n: usize) {
     println!("  gesamt: {el:?}  (gueltig: {ok}/{n})");
 }
 
-fn cmd_benchpar(n: usize, threads: usize) {
+fn cmd_benchpar(n: usize, threads_opt: Option<usize>) {
     use std::time::Instant;
 
     let (secret, window) = load_config();
+    let threads = threads_opt
+        .or_else(|| env::var("THREADS").ok().and_then(|s| s.parse().ok()))
+        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
     let token = make_token(&Timestamp::now(), secret, window);
 
     // Warm-up (single thread, wie bei benchreq).
@@ -244,7 +250,7 @@ Aufruf:
   ergebnis-fpe validate <TOKEN>  Token pruefen; alter Token -> neuer Main-Key-Token
   ergebnis-fpe bench [N]       FPE-Kern in-process messen (ns/op), Default N=1000000
   ergebnis-fpe benchreq [N]    volle Request-Validierung simulieren, Default N=10000000
-  ergebnis-fpe benchpar [N] [T]  parallel: N Requests auf T Threads, Default T=CPU-Kerne
+  ergebnis-fpe benchpar [N] [T]  parallel: N Requests auf T Threads, Default T=THREADS/.env bzw. CPU-Kerne
 
 ISO-Zeitstempel: 2026-08-31T14:07:23.456
 Fenster: WINDOW_MINUTES in .env (Default 15). Token gilt 3 Fenster:
@@ -276,16 +282,10 @@ fn main() {
         }
         "bench" => cmd_bench(rest.first().and_then(|s| s.parse().ok()).unwrap_or(1_000_000)),
         "benchreq" => cmd_benchreq(rest.first().and_then(|s| s.parse().ok()).unwrap_or(10_000_000)),
-        "benchpar" => {
-            let threads = rest
-                .get(1)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
-            cmd_benchpar(
-                rest.first().and_then(|s| s.parse().ok()).unwrap_or(5_000_000),
-                threads,
-            )
-        }
+        "benchpar" => cmd_benchpar(
+            rest.first().and_then(|s| s.parse().ok()).unwrap_or(5_000_000),
+            rest.get(1).and_then(|s| s.parse().ok()),
+        ),
         "-h" | "--help" | "help" => help(),
         _ => {
             eprintln!("unbekannter Befehl: {cmd}");
