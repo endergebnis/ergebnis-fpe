@@ -85,6 +85,42 @@ Measured locally with `cargo build --release`, `/usr/bin/time -v` (CLI) and
 - Memory is per-invocation and released on exit. There is no long-lived process
   and no database, so steady-state memory is zero.
 
+## Server / in-process
+
+For a request path (a web server validating a visitor token per request), do
+**not** spawn the binary per token — that pays fork/exec + dotenv + chrono on
+every call. Instead embed the core as a library and call it in-process. The
+FPE core runs in ~1 µs, so a single thread handles roughly 1 M validations/s,
+which is enough even for DDoS-level traffic.
+
+Add the crate as a dependency and call the same primitives the CLI uses:
+
+```rust
+use ergebnis_fpe::{make_token, validate_token, Timestamp, DEFAULT_WINDOW_MINUTES};
+
+// Shared once per process (no per-request state, no DB, no locks).
+let secret: u64 = std::env::var("SERVER_SECRET")?.parse()?;
+let window: i64 = DEFAULT_WINDOW_MINUTES;
+
+// Issue (login / first visit):
+let token = make_token(&Timestamp::now(), secret, window);
+
+// Validate (every request), e.g. in an axum/actix handler:
+match validate_token(&token, secret, window) {
+    Ok(v) => {
+        // v.tier: MAIN | SECONDARY | TERTIARY
+        // v.issued_at, v.age_minutes
+        // v.fresh_token: Some(new MAIN token) when the old one was deprecated
+    }
+    Err(e) => {
+        // expired, forged, or malformed -> reject
+    }
+}
+```
+
+Because validation is stateless, any number of workers can share the same
+secret with no coordination. The only per-request cost is the FPE core.
+
 ## Formalization
 
 See [FORMALIZATION.md](FORMALIZATION.md) for the full mathematical definition
