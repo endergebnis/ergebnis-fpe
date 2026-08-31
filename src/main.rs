@@ -430,6 +430,43 @@ fn cmd_validate(token: &str) {
     validate_token(token, secret, window);
 }
 
+fn cmd_bench(n: usize) {
+    use std::time::Instant;
+    let secret = load_secret();
+    let ts = parse_timestamp(None);
+    let values = ts.values();
+    let fp = make_fingerprint(&values, secret);
+
+    // Warm-up, damit die Messung nicht von der ersten Allokation verfaelscht wird.
+    for _ in 0..100_000 {
+        let _ = make_fingerprint(&values, secret);
+    }
+
+    let t = Instant::now();
+    for _ in 0..n {
+        let _ = make_fingerprint(&values, secret);
+    }
+    let enc = t.elapsed();
+
+    let t = Instant::now();
+    for _ in 0..n {
+        let _ = recover_values(&fp, secret);
+    }
+    let dec = t.elapsed();
+
+    println!("FPE-Kern (in-process, n={n}):");
+    println!(
+        "  make_fingerprint: {:>10.1} ns/op  ({:.2} M ops/s)",
+        enc.as_nanos() as f64 / n as f64,
+        n as f64 / enc.as_secs_f64() / 1e6
+    );
+    println!(
+        "  recover_values:   {:>10.1} ns/op  ({:.2} M ops/s)",
+        dec.as_nanos() as f64 / n as f64,
+        n as f64 / dec.as_secs_f64() / 1e6
+    );
+}
+
 fn help() {
     let text = "ErgebnisFPE: Besucher-Token mit rotierendem Key-Ring (stateless, kein Blacklist-Flag)
 
@@ -437,6 +474,7 @@ Aufruf:
   ergebnis-fpe init [--force]  SERVER_SECRET erzeugen & in .env schreiben
   ergebnis-fpe make [ISO]      Token erzeugen (Default: jetzt)
   ergebnis-fpe validate <TOKEN>  Token pruefen; alter Token -> neuer Main-Key-Token
+  ergebnis-fpe bench [N]       FPE-Kern in-process messen (ns/op), Default N=1000000
 
 ISO-Zeitstempel: 2026-08-31T14:07:23.456
 Fenster: WINDOW_MINUTES in .env (Default 15). Token gilt 3 Fenster:
@@ -466,6 +504,7 @@ fn main() {
             }
             cmd_validate(&rest[0]);
         }
+        "bench" => cmd_bench(rest.first().and_then(|s| s.parse().ok()).unwrap_or(1_000_000)),
         "-h" | "--help" | "help" => help(),
         _ => {
             eprintln!("unbekannter Befehl: {cmd}");
