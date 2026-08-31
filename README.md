@@ -52,6 +52,28 @@ token when it is validated.
     SERVER_SECRET=<64-bit integer, keep secret>
     WINDOW_MINUTES=15
 
+## Benchmarks
+
+Measured locally with `cargo build --release` and `/usr/bin/time -v`
+(5000-iteration validate loop). The binary is self-contained and
+single-threaded.
+
+| Metric | Value |
+|--------|-------|
+| Binary size | ~672 KB |
+| Peak RSS (one call) | ~2.3 MB |
+| Wall time (one call) | ~1.6 ms |
+| Throughput (one process per call) | ~620 tokens/s |
+| CPU | single-threaded, ~1 core per call |
+
+Notes:
+
+- One `make`/`validate` is ~1.6 ms wall time, almost all of it process
+  startup (fork/exec + dotenv + chrono). The FPE core itself runs in
+  microseconds.
+- Memory is per-invocation and released on exit. There is no long-lived
+  process and no database, so steady-state memory is zero.
+
 ## Formalization
 
 See [FORMALIZATION.md](FORMALIZATION.md) for the full mathematical definition
