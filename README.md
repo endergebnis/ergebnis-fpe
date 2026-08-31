@@ -5,8 +5,8 @@ Stateless visitor tokens with a rotating key ring (sliding window).
 ErgebnisFPE turns a timestamp into an opaque, reversible token. The core is a
 format-preserving encryption (an 8-round Feistel network over Z_24) combined
 with the Julian Day Number and the Maya Long Count. On top sits generation
-tracking: every 15-minute window gets its own key, so a token ages from MAIN to
-SECONDARY to TERTIARY and then expires.
+tracking: every window (`WINDOW_MINUTES`, default 15) gets its own key, so a
+token ages from MAIN to SECONDARY to TERTIARY and then expires.
 
 Validation is fully stateless. There is no blacklist flag and no database. An
 old token (SECONDARY/TERTIARY) is automatically up-leveled to a fresh MAIN-key
@@ -35,7 +35,8 @@ token when it is validated.
     <generation>.<fingerprint>
 
 - `generation` is the plaintext window index (15-minute slots since year 0).
-- `fingerprint` is the FPE-encrypted timestamp, encoded in base62.
+- `fingerprint` is the lossless timestamp (year down to millisecond),
+  FPE-encrypted and encoded in base62.
 
 ## Validation tiers
 

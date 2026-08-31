@@ -52,21 +52,13 @@ T  --Φ-->  Z_24^24  --E_K-->  Z_24^24  --Enc-->  {0 .. 24^24-1}  --base62-->  T
 ## Julianische Tageszahl
 
 $$
-\text{JDN}(y, m, d)
-=
-d + \left\lfloor\frac{153m'+2}{5}\right\rfloor
-+ 365y' + \left\lfloor\frac{y'}{4}\right\rfloor
-- \left\lfloor\frac{y'}{100}\right\rfloor
-+ \left\lfloor\frac{y'}{400}\right\rfloor
-- 32045,
+\text{JDN}(y, m, d) = d + \left\lfloor\frac{153m'+2}{5}\right\rfloor + 365y' + \left\lfloor\frac{y'}{4}\right\rfloor - \left\lfloor\frac{y'}{100}\right\rfloor + \left\lfloor\frac{y'}{400}\right\rfloor - 32045,
 $$
 
 mit
 
 $$
-a = \left\lfloor\frac{14-m}{12}\right\rfloor,\quad
-y' = y + 4800 - a,\quad
-m' = m + 12a - 3.
+a = \left\lfloor\frac{14-m}{12}\right\rfloor,\quad y' = y + 4800 - a,\quad m' = m + 12a - 3.
 $$
 
 Die JDN wird **nicht** modulo 24 reduziert, sondern ihre Dezimalziffern werden
@@ -105,17 +97,14 @@ $$
 mit
 
 $$
-c_1 = \text{0xFF51AFD7ED558CCD},\qquad
-c_2 = \text{0xC4CEB9FE1A85EC53}.
+c_1 = \text{0xFF51AFD7ED558CCD},\qquad c_2 = \text{0xC4CEB9FE1A85EC53}.
 $$
 
 Die Rundenschlüssel entstehen durch **verkettete** Anwendung (nicht
 `H(s+iγ)`, wie in der alten Fassung beschrieben):
 
 $$
-S_0 = H(s),\qquad
-S_i = H(S_{i-1} + \gamma) \bmod 2^{64},\qquad
-K_i = S_i \bmod 24,
+S_0 = H(s),\qquad S_i = H(S_{i-1} + \gamma) \bmod 2^{64},\qquad K_i = S_i \bmod 24,
 $$
 
 mit der ungeraden Weyl-Konstante
@@ -131,11 +120,7 @@ $$
 Die Rundenfunktion ist elementweise definiert:
 
 $$
-F(R,K)_j
-=
-\text{resolve}(R_j, K)
-=
-12 + \left(|R_j - K| \bmod 12\right).
+F(R,K)_j = \text{resolve}(R_j, K) = 12 + \left(|R_j - K| \bmod 12\right).
 $$
 
 Das Bild von `resolve` liegt in `{12,…,23}`; die Funktion ist **nicht**
@@ -143,8 +128,7 @@ injektiv. Die Bijektivität des Netzwerks folgt dennoch aus der
 Feistel-Struktur:
 
 $$
-\Psi_i(L,R) = \left(R, \left(L + F(R,K_i)\right) \bmod 24\right),\qquad
-\Psi_i^{-1}(L',R') = \left(\left(R' - F(L',K_i)\right) \bmod 24, L'\right).
+\Psi_i(L,R) = \left(R, \left(L + F(R,K_i)\right) \bmod 24\right),\qquad \Psi_i^{-1}(L',R') = \left(\left(R' - F(L',K_i)\right) \bmod 24, L'\right).
 $$
 
 Der Klartextvektor wird in Hälften geteilt, `L_0=(x_1,…,x_12)`,
