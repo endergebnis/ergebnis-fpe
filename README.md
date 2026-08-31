@@ -63,8 +63,8 @@ Measured locally with `cargo build --release`, `/usr/bin/time -v` (CLI) and
 
 | Operation | ns/op | ops/s |
 |-----------|-------|-------|
-| `make_fingerprint` (encrypt) | ~1338 | ~0.75 M |
-| `recover_values` (decrypt)   | ~931  | ~1.07 M |
+| `make_fingerprint` (encrypt) | ~950  | ~1.05 M |
+| `recover_values` (decrypt)   | ~1065 | ~0.94 M |
 
 ### Full CLI call (one process per token)
 
@@ -72,18 +72,21 @@ Measured over 200 runs; memory via `/usr/bin/time -v`.
 
 | Metric | Value |
 |--------|-------|
-| Binary size | 705,008 bytes (~688 KiB) |
-| Peak RAM (one call) | 2,304 KB (~2.25 MiB) |
-| Wall time (one call) | ~1.45 ms |
-| Throughput (one process per call) | ~692 tokens/s |
+| Binary size | 447,168 bytes (~437 KiB, stripped) |
+| Peak RAM (one call) | 2,176 KB (~2.13 MiB) |
+| Wall time (one call) | ~1.33 ms |
+| Throughput (one process per call) | ~755 tokens/s |
 | CPU | single-threaded, ~100% of one core per call |
 
 ### Notes
 
-- The FPE core costs ~1 µs per token. That is <0.1% of the 1.45 ms call; the
-  rest is process startup (fork/exec + dotenv + chrono).
+- The FPE core is alloc-free (fixed arrays, no Vec/String in the hot path) and
+  costs ~1 µs per token. That is <0.1% of the 1.33 ms call; the rest is process
+  startup (fork/exec + dotenv + chrono).
 - Called in-process (a long-lived service) instead of spawning one process per
-  token, throughput rises from ~692/s to ~1.07 M/s (decrypt), roughly 1500x.
+  token, throughput rises from ~755/s to ~1 M/s, roughly 1500x.
+- Timestamps are captured in UTC; only differences between timestamps matter,
+  so the local timezone is irrelevant to the token logic.
 - Memory is per-invocation and released on exit. There is no long-lived process
   and no database, so steady-state memory is zero.
 

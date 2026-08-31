@@ -13,9 +13,10 @@ use ergebnis_fpe::{make_token, validate_token, Timestamp, DEFAULT_WINDOW_MINUTES
 
 // ---------- .env ----------
 
-fn load_secret() -> u64 {
+// .env einmal laden und beide Werte rauslesen (statt zweimal dotenv aufzurufen).
+fn load_config() -> (u64, i64) {
     dotenvy::dotenv().ok();
-    match env::var("SERVER_SECRET") {
+    let secret = match env::var("SERVER_SECRET") {
         Ok(s) => s.parse::<u64>().unwrap_or_else(|_| {
             eprintln!("SERVER_SECRET muss eine 64-Bit-Zahl sein");
             exit(1);
@@ -24,18 +25,15 @@ fn load_secret() -> u64 {
             eprintln!("SERVER_SECRET fehlt. Zuerst: ergebnis-fpe init");
             exit(1);
         }
-    }
-}
-
-fn load_window() -> i64 {
-    dotenvy::dotenv().ok();
-    match env::var("WINDOW_MINUTES") {
+    };
+    let window = match env::var("WINDOW_MINUTES") {
         Ok(s) => s.parse::<i64>().unwrap_or_else(|_| {
             eprintln!("WINDOW_MINUTES muss eine Ganzzahl sein");
             exit(1);
         }),
         Err(_) => DEFAULT_WINDOW_MINUTES,
-    }
+    };
+    (secret, window)
 }
 
 fn generate_secret() -> u64 {
@@ -82,8 +80,7 @@ fn cmd_init(force: bool) {
 }
 
 fn cmd_make(arg: Option<&str>) {
-    let secret = load_secret();
-    let window = load_window();
+    let (secret, window) = load_config();
     let ts = parse_timestamp(arg);
     let token = make_token(&ts, secret, window);
     println!("Zeitpunkt:  {}", ts.display());
@@ -92,8 +89,7 @@ fn cmd_make(arg: Option<&str>) {
 }
 
 fn cmd_validate(token: &str) {
-    let secret = load_secret();
-    let window = load_window();
+    let (secret, window) = load_config();
     match validate_token(token, secret, window) {
         Ok(v) => {
             println!("Ergebnis:    GUELTIG ({})", v.tier);
@@ -114,7 +110,7 @@ fn cmd_bench(n: usize) {
     use std::time::Instant;
     use ergebnis_fpe::{make_fingerprint, recover_values};
 
-    let secret = load_secret();
+    let secret = load_config().0;
     let ts = parse_timestamp(None);
     let values = ts.values();
     let fp = make_fingerprint(&values, secret);

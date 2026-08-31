@@ -8,12 +8,16 @@
 //!
 //! Einbettung in einen Server (Request-Path): statt pro Request das Binary zu
 //! starten, [`make_token`]/[`validate_token`] direkt im Prozess aufrufen.
+//!
+//! Der Hot Path (Feistel-Runden, KDF, Kodierung) ist alloc-frei: feste Arrays
+//! statt Vec, keine String-Allokation fuer die JDN-Ziffern.
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Timelike, Utc};
 
 const BASE: i64 = 24;
 const N_ROUNDS: usize = 8;
 const N_VALUES: usize = 24;
+const HALF: usize = N_VALUES / 2;
 const GOLDEN: u64 = 0x9E3779B97F4A7C15;
 const B62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -70,77 +74,89 @@ fn collect_message_values(
     minute: u32,
     second: u32,
     millisecond: u32,
-) -> Vec<i64> {
+) -> [i64; N_VALUES] {
     let jdn = julian_day_number(year, month, day);
     let maya = maya_long_count(jdn);
 
     // Zeit verlustfrei: Stunde 0-23 (1 Ziffer), Minute/Sekunde 0-59 (2 Ziffern),
     // Millisekunde 0-999 (3 Ziffern) statt %24-Kollisionen.
-    let mut values = vec![
-        hour as i64,
-        (minute / 24) as i64,
-        (minute % 24) as i64,
-        (second / 24) as i64,
-        (second % 24) as i64,
-        (millisecond / 576) as i64,
-        ((millisecond / 24) % 24) as i64,
-        (millisecond % 24) as i64,
-        (month as i64) % 24,
-        (day as i64) % 24,
-        (year / 100) % 24,
-        (year % 100) % 24,
-    ];
-    for c in jdn.to_string().bytes() {
-        values.push((c - b'0') as i64); // JDN-Ziffern OHNE Modulo -> verlustfrei
+    let mut values = [0i64; N_VALUES];
+    values[0] = hour as i64;
+    values[1] = (minute / 24) as i64;
+    values[2] = (minute % 24) as i64;
+    values[3] = (second / 24) as i64;
+    values[4] = (second % 24) as i64;
+    values[5] = (millisecond / 576) as i64;
+    values[6] = ((millisecond / 24) % 24) as i64;
+    values[7] = (millisecond % 24) as i64;
+    values[8] = (month as i64) % 24;
+    values[9] = (day as i64) % 24;
+    values[10] = (year / 100) % 24;
+    values[11] = (year % 100) % 24;
+
+    // JDN-Ziffern OHNE Modulo -> verlustfrei. Feste Breite 7 (passt zu
+    // Timestamp::from_values, das v[12..19] liest); gueltig bis JDN < 10^7.
+    let mut n = jdn;
+    for i in (0..7).rev() {
+        values[12 + i] = n % 10;
+        n /= 10;
     }
-    for v in maya {
-        values.push(v % 24);
+    for (i, v) in maya.iter().enumerate() {
+        values[19 + i] = v % 24;
     }
     values
 }
 
-fn key_schedule_from_secret(secret: u64, n_rounds: usize) -> Vec<i64> {
+fn key_schedule_from_secret(secret: u64) -> [i64; N_ROUNDS] {
     let mut state = fmix64(secret);
-    let mut keys = Vec::with_capacity(n_rounds);
-    for _ in 0..n_rounds {
+    let mut keys = [0i64; N_ROUNDS];
+    for k in keys.iter_mut() {
         state = state.wrapping_add(GOLDEN);
         state = fmix64(state);
-        keys.push((state % 24) as i64);
+        *k = (state % 24) as i64;
     }
     keys
 }
 
-fn feistel_encrypt(plain: &[i64], round_keys: &[i64]) -> (Vec<i64>, Vec<i64>) {
-    let half = plain.len() / 2;
-    let mut l = plain[..half].to_vec();
-    let mut r = plain[half..].to_vec();
+fn feistel_encrypt(plain: &[i64; N_VALUES], round_keys: &[i64; N_ROUNDS]) -> [i64; N_VALUES] {
+    let mut l = [0i64; HALF];
+    let mut r = [0i64; HALF];
+    l.copy_from_slice(&plain[..HALF]);
+    r.copy_from_slice(&plain[HALF..]);
     for &k in round_keys {
-        let new_r: Vec<i64> = l
-            .iter()
-            .zip(&r)
-            .map(|(&a, &b)| (a + resolve(b, k)) % BASE)
-            .collect();
+        let mut new_r = [0i64; HALF];
+        for i in 0..HALF {
+            new_r[i] = (l[i] + resolve(r[i], k)) % BASE;
+        }
         l = r;
         r = new_r;
     }
-    (l, r)
+    let mut out = [0i64; N_VALUES];
+    out[..HALF].copy_from_slice(&l);
+    out[HALF..].copy_from_slice(&r);
+    out
 }
 
-fn feistel_decrypt(l: &[i64], r: &[i64], round_keys: &[i64]) -> Vec<i64> {
-    let mut l = l.to_vec();
-    let mut r = r.to_vec();
+fn feistel_decrypt(cipher: &[i64; N_VALUES], round_keys: &[i64; N_ROUNDS]) -> [i64; N_VALUES] {
+    let mut l = [0i64; HALF];
+    let mut r = [0i64; HALF];
+    l.copy_from_slice(&cipher[..HALF]);
+    r.copy_from_slice(&cipher[HALF..]);
     for &k in round_keys.iter().rev() {
-        let prev_r = l.clone();
-        let prev_l: Vec<i64> = l
-            .iter()
-            .zip(&r)
-            .map(|(&a, &b)| (b - resolve(a, k)).rem_euclid(BASE))
-            .collect();
+        let prev_r = l;
+        let mut prev_l = [0i64; HALF];
+        for i in 0..HALF {
+            // x in [-23, 23]; rem_euclid(24) == x + 24 bei x<0.
+            let x = r[i] - resolve(l[i], k);
+            prev_l[i] = if x < 0 { x + BASE } else { x };
+        }
         l = prev_l;
         r = prev_r;
     }
-    l.extend(&r);
-    l
+    let mut out = [0i64; N_VALUES];
+    out[..HALF].copy_from_slice(&l);
+    out[HALF..].copy_from_slice(&r);
+    out
 }
 
 fn encode(vector: &[i64]) -> u128 {
@@ -153,10 +169,10 @@ fn encode(vector: &[i64]) -> u128 {
     fp
 }
 
-fn decode(mut fp: u128, length: usize) -> Vec<i64> {
-    let mut v = Vec::with_capacity(length);
-    for _ in 0..length {
-        v.push((fp % BASE as u128) as i64);
+fn decode(mut fp: u128) -> [i64; N_VALUES] {
+    let mut v = [0i64; N_VALUES];
+    for i in 0..N_VALUES {
+        v[i] = (fp % BASE as u128) as i64;
         fp /= BASE as u128;
     }
     v
@@ -188,23 +204,21 @@ fn from_base62(s: &str) -> Result<u128, String> {
 }
 
 /// FPE-Kern: Werte-Vektor verschluesseln -> base62-String.
-pub fn make_fingerprint(values: &[i64], secret: u64) -> String {
-    let round_keys = key_schedule_from_secret(secret, N_ROUNDS);
-    let (l, r) = feistel_encrypt(values, &round_keys);
-    let mut cipher = l;
-    cipher.extend(&r);
+pub fn make_fingerprint(values: &[i64; N_VALUES], secret: u64) -> String {
+    let round_keys = key_schedule_from_secret(secret);
+    let cipher = feistel_encrypt(values, &round_keys);
     to_base62(encode(&cipher))
 }
 
 /// FPE-Kern: base62-String entschluesseln -> Werte-Vektor.
-pub fn recover_values(fp: &str, secret: u64) -> Result<Vec<i64>, String> {
-    let round_keys = key_schedule_from_secret(secret, N_ROUNDS);
-    let cipher = decode(from_base62(fp)?, N_VALUES);
-    let half = cipher.len() / 2;
-    Ok(feistel_decrypt(&cipher[..half], &cipher[half..], &round_keys))
+pub fn recover_values(fp: &str, secret: u64) -> Result<[i64; N_VALUES], String> {
+    let round_keys = key_schedule_from_secret(secret);
+    let cipher = decode(from_base62(fp)?);
+    Ok(feistel_decrypt(&cipher, &round_keys))
 }
 
 /// Zeitstempel mit allen verlustfreien Komponenten (bis Millisekunde).
+/// Zeiten werden in UTC erfasst; nur Differenzen zaehlen, die Zeitzone ist egal.
 #[derive(Debug, Clone)]
 pub struct Timestamp {
     pub year: i64,
@@ -218,7 +232,7 @@ pub struct Timestamp {
 
 impl Timestamp {
     pub fn now() -> Timestamp {
-        let n = Local::now();
+        let n = Utc::now();
         Timestamp {
             year: n.year() as i64,
             month: n.month(),
@@ -244,7 +258,7 @@ impl Timestamp {
         self.total_minutes() / window_minutes
     }
 
-    pub fn values(&self) -> Vec<i64> {
+    pub fn values(&self) -> [i64; N_VALUES] {
         collect_message_values(
             self.year, self.month, self.day, self.hour, self.minute, self.second, self.millis,
         )
@@ -348,4 +362,28 @@ pub fn validate_token(token: &str, secret: u64, window_minutes: i64) -> Result<V
         age_minutes,
         fresh_token,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip() {
+        let secret = 7411156633014379033;
+        let ts = Timestamp {
+            year: 2026,
+            month: 8,
+            day: 31,
+            hour: 5,
+            minute: 9,
+            second: 35,
+            millis: 638,
+        };
+        let v = ts.values();
+        let fp = make_fingerprint(&v, secret);
+        let back = recover_values(&fp, secret).unwrap();
+        assert_eq!(v, back);
+        assert_eq!(ts.display(), Timestamp::from_values(&back).display());
+    }
 }
