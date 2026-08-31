@@ -145,6 +145,35 @@ fn cmd_bench(n: usize) {
     );
 }
 
+fn cmd_benchreq(n: usize) {
+    use std::time::Instant;
+
+    let (secret, window) = load_config();
+    let token = make_token(&Timestamp::now(), secret, window);
+
+    // Warm-up, damit die Messung nicht von den ersten Allokationen verfaelscht wird.
+    for _ in 0..100_000 {
+        let _ = validate_token(&token, secret, window);
+    }
+
+    let t = Instant::now();
+    let mut ok = 0usize;
+    for _ in 0..n {
+        if validate_token(&token, secret, window).is_ok() {
+            ok += 1;
+        }
+    }
+    let el = t.elapsed();
+
+    println!("Request-Simulation (in-process validate_token, n={n}):");
+    println!(
+        "  durchschnittlich: {:>10.1} ns/request  ({:.2} M requests/s)",
+        el.as_nanos() as f64 / n as f64,
+        n as f64 / el.as_secs_f64() / 1e6
+    );
+    println!("  gesamt: {el:?}  (gueltig: {ok}/{n})");
+}
+
 fn help() {
     let text = "ErgebnisFPE: Besucher-Token mit rotierendem Key-Ring (stateless, kein Blacklist-Flag)
 
@@ -153,6 +182,7 @@ Aufruf:
   ergebnis-fpe make [ISO]      Token erzeugen (Default: jetzt)
   ergebnis-fpe validate <TOKEN>  Token pruefen; alter Token -> neuer Main-Key-Token
   ergebnis-fpe bench [N]       FPE-Kern in-process messen (ns/op), Default N=1000000
+  ergebnis-fpe benchreq [N]    volle Request-Validierung simulieren, Default N=10000000
 
 ISO-Zeitstempel: 2026-08-31T14:07:23.456
 Fenster: WINDOW_MINUTES in .env (Default 15). Token gilt 3 Fenster:
@@ -183,6 +213,7 @@ fn main() {
             cmd_validate(&rest[0]);
         }
         "bench" => cmd_bench(rest.first().and_then(|s| s.parse().ok()).unwrap_or(1_000_000)),
+        "benchreq" => cmd_benchreq(rest.first().and_then(|s| s.parse().ok()).unwrap_or(10_000_000)),
         "-h" | "--help" | "help" => help(),
         _ => {
             eprintln!("unbekannter Befehl: {cmd}");

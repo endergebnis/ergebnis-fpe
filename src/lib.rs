@@ -21,6 +21,17 @@ const HALF: usize = N_VALUES / 2;
 const GOLDEN: u64 = 0x9E3779B97F4A7C15;
 const B62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+// O(1) ASCII-Byte -> base62-Wert; -1 = ungueltig.
+const B62_DECODE: [i8; 256] = {
+    let mut table = [-1i8; 256];
+    let mut i = 0;
+    while i < B62.len() {
+        table[B62[i] as usize] = i as i8;
+        i += 1;
+    }
+    table
+};
+
 /// Default-Fenstergroesse in Minuten.
 pub const DEFAULT_WINDOW_MINUTES: i64 = 15;
 
@@ -182,7 +193,7 @@ fn to_base62(mut n: u128) -> String {
     if n == 0 {
         return "0".to_string();
     }
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(22);
     while n > 0 {
         out.push(B62[(n % 62) as usize] as char);
         n /= 62;
@@ -194,10 +205,10 @@ fn to_base62(mut n: u128) -> String {
 fn from_base62(s: &str) -> Result<u128, String> {
     let mut n: u128 = 0;
     for ch in s.bytes() {
-        let idx = B62
-            .iter()
-            .position(|&c| c == ch)
-            .ok_or_else(|| format!("ungueltiges base62-Zeichen: {}", ch as char))?;
+        let idx = B62_DECODE[ch as usize];
+        if idx < 0 {
+            return Err(format!("ungueltiges base62-Zeichen: {}", ch as char));
+        }
         n = n * 62 + idx as u128;
     }
     Ok(n)
@@ -301,9 +312,12 @@ fn generation_key(secret: u64, generation: i64) -> u64 {
 /// Token = "<generation>.<fingerprint>". Generation ist Klartext (nur Fenster-
 /// Index, keine Nutzdaten) und sagt dem Server, welchen Key er probieren soll.
 pub fn make_token(ts: &Timestamp, secret: u64, window_minutes: i64) -> String {
-    let g = ts.generation(window_minutes);
-    let fp = make_fingerprint(&ts.values(), generation_key(secret, g));
-    format!("{g}.{fp}")
+    make_token_with_generation(ts, secret, ts.generation(window_minutes))
+}
+
+fn make_token_with_generation(ts: &Timestamp, secret: u64, generation: i64) -> String {
+    let fp = make_fingerprint(&ts.values(), generation_key(secret, generation));
+    format!("{generation}.{fp}")
 }
 
 fn tier_name(delta: i64) -> Option<&'static str> {
@@ -336,7 +350,8 @@ pub fn validate_token(token: &str, secret: u64, window_minutes: i64) -> Result<V
     let g: i64 = g_str.parse().map_err(|_| "ungueltige Generation im Token")?;
 
     let now = Timestamp::now();
-    let delta = now.generation(window_minutes) - g;
+    let now_minutes = now.total_minutes();
+    let delta = now_minutes / window_minutes - g;
 
     let tier = tier_name(delta).ok_or("ABGELAUFEN / UNGUELTIG (Fenster ausserhalb des Key-Rings)")?;
 
@@ -348,10 +363,10 @@ pub fn validate_token(token: &str, secret: u64, window_minutes: i64) -> Result<V
         return Err("UNGUELTIG (Signatur passt nicht zur Generation)".to_string());
     }
 
-    let age_minutes = now.total_minutes() - ts.total_minutes();
+    let age_minutes = now_minutes - ts.total_minutes();
 
     let fresh_token = if delta > 0 {
-        Some(make_token(&now, secret, window_minutes))
+        Some(make_token_with_generation(&now, secret, g + delta))
     } else {
         None
     };
