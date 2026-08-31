@@ -174,6 +174,67 @@ fn cmd_benchreq(n: usize) {
     println!("  gesamt: {el:?}  (gueltig: {ok}/{n})");
 }
 
+fn cmd_benchpar(n: usize, threads: usize) {
+    use std::time::Instant;
+
+    let (secret, window) = load_config();
+    let token = make_token(&Timestamp::now(), secret, window);
+
+    // Warm-up (single thread, wie bei benchreq).
+    for _ in 0..100_000 {
+        let _ = validate_token(&token, secret, window);
+    }
+
+    // Referenz: ein Thread.
+    let t = Instant::now();
+    let mut ok = 0usize;
+    for _ in 0..n {
+        if validate_token(&token, secret, window).is_ok() {
+            ok += 1;
+        }
+    }
+    let single = t.elapsed();
+    let single_rate = n as f64 / single.as_secs_f64();
+
+    // Parallel: n total, auf `threads` aufgeteilt, jeder validiert unabhaengig.
+    let per = n / threads;
+    let t = Instant::now();
+    let handles: Vec<_> = (0..threads)
+        .map(|_| {
+            let token = token.clone();
+            std::thread::spawn(move || {
+                let mut c = 0usize;
+                for _ in 0..per {
+                    if validate_token(&token, secret, window).is_ok() {
+                        c += 1;
+                    }
+                }
+                c
+            })
+        })
+        .collect();
+    let par_ok: usize = handles.into_iter().map(|h| h.join().unwrap()).sum();
+    let par = t.elapsed();
+    let par_rate = n as f64 / par.as_secs_f64();
+
+    println!("Parallel-Simulation (in-process validate_token, {threads} Threads, n={n}):");
+    println!(
+        "  1 Thread:       {:>10.1} ns/req  ({:.2} M req/s)",
+        single.as_nanos() as f64 / n as f64,
+        single_rate / 1e6
+    );
+    println!(
+        "  {threads} Threads:     {:>10.1} ns/req  ({:.2} M req/s)",
+        par.as_nanos() as f64 / n as f64,
+        par_rate / 1e6
+    );
+    println!(
+        "  Speedup:        {:.2}x  (linear waere {threads:.0}x)",
+        par_rate / single_rate
+    );
+    println!("  gesamt: {single:?} (1 Thread) / {par:?} ({threads} Threads)  gueltig: {ok}/{n} bzw. {par_ok}/{n}");
+}
+
 fn help() {
     let text = "ErgebnisFPE: Besucher-Token mit rotierendem Key-Ring (stateless, kein Blacklist-Flag)
 
@@ -183,6 +244,7 @@ Aufruf:
   ergebnis-fpe validate <TOKEN>  Token pruefen; alter Token -> neuer Main-Key-Token
   ergebnis-fpe bench [N]       FPE-Kern in-process messen (ns/op), Default N=1000000
   ergebnis-fpe benchreq [N]    volle Request-Validierung simulieren, Default N=10000000
+  ergebnis-fpe benchpar [N] [T]  parallel: N Requests auf T Threads, Default T=CPU-Kerne
 
 ISO-Zeitstempel: 2026-08-31T14:07:23.456
 Fenster: WINDOW_MINUTES in .env (Default 15). Token gilt 3 Fenster:
@@ -214,6 +276,16 @@ fn main() {
         }
         "bench" => cmd_bench(rest.first().and_then(|s| s.parse().ok()).unwrap_or(1_000_000)),
         "benchreq" => cmd_benchreq(rest.first().and_then(|s| s.parse().ok()).unwrap_or(10_000_000)),
+        "benchpar" => {
+            let threads = rest
+                .get(1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
+            cmd_benchpar(
+                rest.first().and_then(|s| s.parse().ok()).unwrap_or(5_000_000),
+                threads,
+            )
+        }
         "-h" | "--help" | "help" => help(),
         _ => {
             eprintln!("unbekannter Befehl: {cmd}");

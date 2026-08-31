@@ -117,9 +117,20 @@ so it disappears next to network I/O and TLS:
 | 100,000 | ~10% |
 | 1,000,000 | ~100% (full core) |
 
-Because validation is stateless, it also scales linearly: N worker threads
-(axum/actix, rayon) give ~N × 1 M/s, so the token layer is never the
-bottleneck — the network stack is.
+Because validation is stateless, it also scales with worker threads. Measured
+on this box (8 physical cores / 16 threads, Xeon E5-2667 v3):
+
+| Threads | Throughput | Speedup |
+|---------|------------|---------|
+| 1 | ~0.86 M req/s | 1× |
+| 8 | ~5.6 M req/s | 6.5× |
+| 16 | ~7.6 M req/s | 8.7× |
+
+Scaling is sub-linear: ~6.5× at 8 threads and only ~8.7× at 16, because the
+16 logical CPUs are 8 physical cores + hyperthreads (SMT adds little for this
+integer-bound workload) and memory bandwidth becomes the limiter. Plan on
+~0.85 M req/s per *physical* core, not per thread. The token layer is never
+the bottleneck at realistic traffic — the network stack is.
 
 Add the crate as a dependency and call the same primitives the CLI uses:
 
