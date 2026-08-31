@@ -84,7 +84,8 @@ Measured over 200 runs; memory via `/usr/bin/time -v`.
   costs ~1 µs per token. That is <0.1% of the 1.33 ms call; the rest is process
   startup (fork/exec + dotenv + chrono).
 - Called in-process (a long-lived service) instead of spawning one process per
-  token, throughput rises from ~755/s to ~1 M/s, roughly 1500x.
+  token, latency drops from ~1.33 ms to ~1 µs and throughput rises from ~755/s
+  to ~0.94–1.05 M/s — a ~1250× (decrypt) to ~1400× (encrypt) speedup.
 - Timestamps are captured in UTC; only differences between timestamps matter,
   so the local timezone is irrelevant to the token logic.
 - Memory is per-invocation and released on exit. There is no long-lived process
@@ -93,10 +94,32 @@ Measured over 200 runs; memory via `/usr/bin/time -v`.
 ## Server / in-process
 
 For a request path (a web server validating a visitor token per request), do
-**not** spawn the binary per token — that pays fork/exec + dotenv + chrono on
-every call. Instead embed the core as a library and call it in-process. The
-FPE core runs in ~1 µs, so a single thread handles roughly 1 M validations/s,
-which is enough even for DDoS-level traffic.
+**not** spawn the binary per token — that pays fork/exec + dynamic linking +
+dotenv + chrono on every call. Embed the core as a library and call it
+in-process instead.
+
+| Mode | Latency per token | Throughput (1 core) |
+|------|-------------------|---------------------|
+| CLI, one process per token | ~1.33 ms | ~755 tokens/s |
+| In-process (library) | ~1.0 µs | ~0.94–1.05 M tokens/s |
+
+The 1.33 ms of a CLI call is ~99.9% process startup, not crypto: the FPE core
+runs in ~1 µs. In-process that startup cost is paid once at boot, and every
+validation afterwards costs only the ~1 µs of the core.
+
+What ~1 M validations/s actually means for a service: one core saturates at
+roughly 1 M token-validations per second. Validation is a ~1 µs CPU operation,
+so it disappears next to network I/O and TLS:
+
+| Requests/s | Share of one core |
+|-----------|-------------------|
+| 10,000 | ~1% |
+| 100,000 | ~10% |
+| 1,000,000 | ~100% (full core) |
+
+Because validation is stateless, it also scales linearly: N worker threads
+(axum/actix, rayon) give ~N × 1 M/s, so the token layer is never the
+bottleneck — the network stack is.
 
 Add the crate as a dependency and call the same primitives the CLI uses:
 
